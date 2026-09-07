@@ -4,6 +4,33 @@ Linux kernel driver for HP OMEN laptop RGB keyboard lighting. Controls 4-zone RG
 
 Inspired by the original [hp-omen-linux-module](https://github.com/pelrun/hp-omen-linux-module) by James Churchill (@pelrun).
 
+> [!WARNING]
+> ## Support Scope
+>
+> This project is provided **as-is** and is maintained primarily as a community-developed Linux driver for HP OMEN hardware. It is **not an official HP product or driver**, and the author cannot provide individual support for every laptop model, BIOS version, kernel, distribution, firmware configuration, or third-party software combination.
+>
+> **Hardware and firmware support is ultimately the responsibility of HP.** HP OMEN laptops are designed and supported by HP, while the Windows-specific firmware interfaces, WMI behavior, and proprietary drivers are outside the control of this project. This driver can only work with the interfaces that HP exposes to Linux.
+>
+> If an issue is caused by:
+> - HP firmware or BIOS behavior
+> - missing or broken HP WMI functionality
+> - an unsupported or undocumented HP hardware interface
+> - HP proprietary Windows drivers or software
+> - a particular laptop revision that exposes different hardware/firmware behavior
+>
+> it may **not be possible for this project to fix it**. In such cases, please report the underlying hardware/firmware compatibility problem to HP as well.
+>
+> Before opening an issue, please:
+> 1. Make sure you are running the latest version of this driver.
+> 2. Check whether your exact laptop model is listed under [Supported Hardware](#supported-hardware).
+> 3. Check the existing issues for similar reports.
+> 4. Follow the troubleshooting steps below.
+> 5. Include your kernel version, distribution, laptop model, BIOS version, relevant `dmesg` output, and exact steps to reproduce the problem.
+>
+> **Issues without sufficient information to reproduce or investigate the problem may be closed without further investigation.**
+>
+> Please do not open an issue expecting the maintainer to diagnose your entire Linux installation, hardware configuration, or HP firmware. This project is a driver, **not a general Linux or HP support service**.
+
 > [!TIP]
 > Need help or want to chat? Join our **official Discord server** for support, questions, or to show off your RGB setups:
 > **[➡️ Click here to join Discord](https://discord.gg/8UwyAJ7sBH)**
