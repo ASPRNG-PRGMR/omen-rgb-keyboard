@@ -23,8 +23,15 @@
 
 static struct input_dev *hp_wmi_input_dev;
 
+/*
+ * Some models (e.g. OMEN 15-dh0xxx) raise the Omen key with an empty payload,
+ * so the scancode arrives as 0 and the event id alone identifies the key.
+ */
+#define OMEN_KEY_SCANCODE_EMPTY 0x0000
+
 static const struct key_entry hp_wmi_keymap[] = {
 	{ KE_KEY, OMEN_KEY_SCANCODE, { KEY_MSDOS } },
+	{ KE_KEY, OMEN_KEY_SCANCODE_EMPTY, { KEY_MSDOS } },
 	{ KE_END, 0 }
 };
 
@@ -129,14 +136,24 @@ static void hp_wmi_notify(union acpi_object *obj, void *context)
 	}
 
 	switch (event_id) {
+	/*
+	 * 0x1d on the models this driver was written against; the
+	 * OMEN 15-dh0xxx raises 0x4 for the same key.
+	 */
+	case 0x4:
 	case 0x1d:
 		/* Omen key press event */
 		if (hp_wmi_input_dev) {
-			sparse_keymap_report_event(hp_wmi_input_dev, event_data, 1, true);
+			pr_debug("Omen key: event 0x%x scancode 0x%x\n",
+				 event_id, event_data);
+			if (!sparse_keymap_report_event(hp_wmi_input_dev,
+							event_data, 1, true))
+				pr_debug("Omen key: scancode 0x%x not in keymap\n",
+					 event_data);
 		}
 		break;
 	default:
-		pr_debug("Unhandled WMI event: 0x%x\n", event_id);
+		pr_debug("Unhandled WMI event: 0x%x data 0x%x\n", event_id, event_data);
 		break;
 	}
 }
