@@ -131,6 +131,21 @@ static int omen_apply_brightness(unsigned long level)
 
 	global_brightness = level;
 
+	/*
+	 * While an animation is running it owns the zone colours and rewrites
+	 * all of them on its next tick, which is at most
+	 * ANIMATION_TIMER_INTERVAL_MS away. Writing the static colours here
+	 * would put them on the keyboard until that tick lands, so a desktop
+	 * that fades the backlight over a second paints the static colour over
+	 * the animation for the whole fade. Record the level and let the
+	 * animation apply it; apply_brightness_to_color() already scales every
+	 * frame by global_brightness.
+	 */
+	if (animation_active) {
+		save_animation_state();
+		return 0;
+	}
+
 	for (int zone = 0; zone < ZONE_COUNT; zone++) {
 		zone_data[zone].colors.red = (original_colors[zone].colors.red * level) / 100;
 		zone_data[zone].colors.green = (original_colors[zone].colors.green * level) / 100;
