@@ -104,6 +104,15 @@ void apply_brightness_to_color(struct color_platform *color)
 	color->blue = (color->blue * global_brightness) / 100;
 }
 
+void fourzone_apply_current_colors(void)
+{
+	for (u8 zone = 0; zone < ZONE_COUNT; zone++) {
+		zone_data[zone].colors = original_colors[zone].colors;
+		apply_brightness_to_color(&zone_data[zone].colors);
+		fourzone_update_led(&zone_data[zone], HPWMI_WRITE);
+	}
+}
+
 void update_all_zones_with_colors(struct color_platform colors[ZONE_COUNT])
 {
 	for (int zone = 0; zone < ZONE_COUNT; zone++) {

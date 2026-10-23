@@ -36,16 +36,28 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 	/* Initialize animation system */
 	animation_init();
 	
-	/* Load saved state */
-	load_animation_state();
-	
-	/* Setup zones and create sysfs attributes */
+	/*
+	 * Setup zones and create sysfs attributes. This seeds original_colors
+	 * from a hardware read, so it has to run before the saved state is
+	 * loaded rather than after, or it overwrites what was restored and the
+	 * saved colors never take effect.
+	 */
 	ret = fourzone_setup(device);
 	if (ret) {
 		animation_cleanup();
 		return ret;
 	}
 
+	/* Load saved state */
+	load_animation_state();
+
+	/*
+	 * Register the LED classdev with the brightness the driver is actually
+	 * using. Left at the default 0 it reports the backlight as off, so
+	 * desktop keyboard-backlight controls show it off and the keyboard
+	 * stays dark until the user moves that control.
+	 */
+	omen_kbd_led.brightness = global_brightness;
 	ret = devm_led_classdev_register(&device->dev, &omen_kbd_led);
 	if (ret)
 		pr_warn("Failed to register keyboard LED classdev: %d\n", ret);
@@ -67,9 +79,15 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 		/* Non-fatal, continue anyway */
 	}
 	
-	/* Start animation if not static */
+	/*
+	 * Push the restored state to the hardware. An animation does this on
+	 * its first tick, but static mode wrote nothing at all, leaving the
+	 * keyboard on whatever the firmware had until something changed.
+	 */
 	if (animation_get_mode() != ANIMATION_STATIC) {
 		animation_start();
+	} else {
+		fourzone_apply_current_colors();
 	}
 	
 	return 0;

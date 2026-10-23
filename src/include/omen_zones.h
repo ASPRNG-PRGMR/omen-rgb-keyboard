@@ -70,6 +70,13 @@ struct platform_zone *match_zone(struct device_attribute *attr);
 void apply_brightness_to_color(struct color_platform *color);
 
 /**
+ * fourzone_apply_current_colors - Write the configured colors to the hardware
+ *
+ * Applies original_colors scaled by the global brightness to every zone.
+ */
+void fourzone_apply_current_colors(void);
+
+/**
  * update_all_zones_with_colors - Update all zones with new colors
  * @colors: Array of colors for all zones
  */
