@@ -34,8 +34,21 @@ enum animation_mode {
 	ANIMATION_AURORA,
 	ANIMATION_DISCO,
 	ANIMATION_GRADIENT,
+	ANIMATION_SPECTRUM,
 	ANIMATION_COUNT
 };
+
+/* Spectrum animation constants
+ *
+ * Cycle length is SPECTRUM_CYCLE_BASE_MS / (speed + 1), which puts the two
+ * slowest steps close together where the drift is most visible: 20s at
+ * speed 1, 13.3s at speed 2, down to 3.6s at speed 10. Dividing by speed
+ * alone, as the other modes do, would jump straight from 20s to 10s.
+ */
+#define SPECTRUM_CYCLE_BASE_MS 40000
+
+/* Steps in one full turn of the wheel: 6 sectors of 256 */
+#define SPECTRUM_WHEEL_STEPS 1536
 
 /* Gradient animation constants */
 #define GRADIENT_MAX_COLORS 16

@@ -316,6 +316,69 @@ static void animation_gradient(void)
 	update_all_zones_with_colors(colors);
 }
 
+/*
+ * spectrum_wheel - Walk the colour wheel at full 8-bit resolution
+ * @pos: Position on the wheel, 0 to SPECTRUM_WHEEL_STEPS - 1
+ * @rgb: Output colour
+ *
+ * hsv_to_rgb() computes in percent, so each channel lands on a multiple of
+ * 255/100 and a 60 degree sector holds only 60 distinct steps. That is fine
+ * for the fast modes, but on a sweep this slow the steps are visible. Walk
+ * the wheel in 6 sectors of 256 instead and ramp the one moving channel
+ * directly in 8-bit space, so every step moves it by exactly one.
+ */
+static void spectrum_wheel(unsigned int pos, struct color_platform *rgb)
+{
+	unsigned int sector = pos >> 8;
+	u8 frac = pos & 0xFF;
+
+	switch (sector) {
+	case 0:
+		rgb->red = 255; rgb->green = frac; rgb->blue = 0;
+		break;
+	case 1:
+		rgb->red = 255 - frac; rgb->green = 255; rgb->blue = 0;
+		break;
+	case 2:
+		rgb->red = 0; rgb->green = 255; rgb->blue = frac;
+		break;
+	case 3:
+		rgb->red = 0; rgb->green = 255 - frac; rgb->blue = 255;
+		break;
+	case 4:
+		rgb->red = frac; rgb->green = 0; rgb->blue = 255;
+		break;
+	default:
+		rgb->red = 255; rgb->green = 0; rgb->blue = 255 - frac;
+		break;
+	}
+}
+
+static void animation_spectrum(void)
+{
+	unsigned long elapsed = jiffies - animation_start_time;
+	unsigned long cycle_time = msecs_to_jiffies(SPECTRUM_CYCLE_BASE_MS /
+						   (animation_speed + 1));
+	unsigned long cycle_pos = elapsed % cycle_time;
+
+	unsigned int pos = (SPECTRUM_WHEEL_STEPS * cycle_pos) / cycle_time;
+
+	struct color_platform colors[ZONE_COUNT];
+	struct color_platform color;
+
+	/*
+	 * Every zone shares one position on the wheel, so the whole keyboard
+	 * reads as a single surface slowly drifting through the spectrum
+	 * rather than as four independently lit strips.
+	 */
+	spectrum_wheel(pos, &color);
+
+	for (int zone = 0; zone < ZONE_COUNT; zone++)
+		colors[zone] = color;
+
+	update_all_zones_with_colors(colors);
+}
+
 /* Animation work function - runs in work queue context */
 static void animation_work_func(struct work_struct *work)
 {
@@ -352,6 +415,9 @@ static void animation_work_func(struct work_struct *work)
 		break;
 	case ANIMATION_GRADIENT:
 		animation_gradient();
+		break;
+	case ANIMATION_SPECTRUM:
+		animation_spectrum();
 		break;
 	default:
 		break;
@@ -411,7 +477,8 @@ static ssize_t animation_mode_show(struct device *dev, struct device_attribute *
 {
 	const char *mode_names[] = {
 		"static", "breathing", "rainbow", "wave", "pulse",
-		"chase", "sparkle", "candle", "aurora", "disco", "gradient"
+		"chase", "sparkle", "candle", "aurora", "disco", "gradient",
+		"spectrum"
 	};
 
 	if (current_animation >= ANIMATION_COUNT)
@@ -447,6 +514,8 @@ static ssize_t animation_mode_set(struct device *dev, struct device_attribute *a
 		new_mode = ANIMATION_DISCO;
 	} else if (strncmp(buf, "gradient", 8) == 0) {
 		new_mode = ANIMATION_GRADIENT;
+	} else if (strncmp(buf, "spectrum", 8) == 0) {
+		new_mode = ANIMATION_SPECTRUM;
 	} else {
 		return -EINVAL;
 	}
