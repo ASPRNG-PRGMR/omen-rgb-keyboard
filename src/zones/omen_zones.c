@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/leds.h>
+#include <linux/moduleparam.h>
 #include <linux/string.h>
 
 #include "omen_rgb_keyboard.h"
@@ -30,6 +31,11 @@ static struct platform_device *zone_platform_dev;
 
 struct platform_zone original_colors[ZONE_COUNT];
 int global_brightness = 100;
+
+static bool brightness_lock;
+module_param(brightness_lock, bool, 0644);
+MODULE_PARM_DESC(brightness_lock,
+		 "Ignore keyboard backlight brightness changes requested through the LED class device, so a desktop cannot dim the keyboard (default 0)");
 
 struct led_classdev omen_kbd_led;
 
@@ -153,6 +159,15 @@ enum led_brightness omen_kbd_brightness_get(struct led_classdev *led_cdev)
 int omen_kbd_brightness_set(struct led_classdev *led_cdev,
 			    enum led_brightness value)
 {
+	/*
+	 * This is the path desktops drive, and it is the one an idle timer
+	 * fades down. Report success without touching the hardware when
+	 * locked: returning an error here only makes callers retry or log,
+	 * and rgb_zones/brightness still sets the level directly.
+	 */
+	if (brightness_lock)
+		return 0;
+
 	return omen_apply_brightness(value);
 }
 
@@ -227,6 +242,45 @@ ssize_t brightness_set(struct device *dev, struct device_attribute *attr,
 
 	return count;
 }
+
+void fourzone_apply_brightness_lock(void)
+{
+	/*
+	 * Holding the backlight at zero is a trap: the lock is precisely what
+	 * stops the desktop writing to the backlight, so there is nothing left
+	 * to raise it again, and a keyboard that stays dark is never what the
+	 * option is for. Come up to full instead and let rgb_zones/brightness
+	 * take it down deliberately if that is really wanted.
+	 */
+	if (brightness_lock && global_brightness == 0)
+		omen_apply_brightness(100);
+}
+
+static ssize_t brightness_lock_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", brightness_lock);
+}
+
+static ssize_t brightness_lock_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	bool lock;
+	int ret;
+
+	ret = kstrtobool(buf, &lock);
+	if (ret)
+		return ret;
+
+	brightness_lock = lock;
+	fourzone_apply_brightness_lock();
+
+	return count;
+}
+
+static struct device_attribute brightness_lock_attr =
+	__ATTR(brightness_lock, 0664, brightness_lock_show, brightness_lock_store);
 
 ssize_t all_show(struct device *dev, struct device_attribute *attr,
 		 char *buf)
@@ -338,7 +392,7 @@ int fourzone_setup(struct platform_device *dev)
 	if (!zone_dev_attrs)
 		return -ENOMEM;
 
-	zone_attrs = kcalloc(ZONE_COUNT + 8, sizeof(struct attribute *),
+	zone_attrs = kcalloc(ZONE_COUNT + 9, sizeof(struct attribute *),
 			     GFP_KERNEL);
 	if (!zone_attrs) {
 		ret = -ENOMEM;
@@ -395,7 +449,8 @@ int fourzone_setup(struct platform_device *dev)
 	zone_attrs[ZONE_COUNT + 4] = &gradient_config_attr.attr;
 	zone_attrs[ZONE_COUNT + 5] = &dev_attr_mute_led.attr;
 	zone_attrs[ZONE_COUNT + 6] = &dev_attr_mute_state.attr;
-	zone_attrs[ZONE_COUNT + 7] = NULL; /* NULL terminate the array */
+	zone_attrs[ZONE_COUNT + 7] = &brightness_lock_attr.attr;
+	zone_attrs[ZONE_COUNT + 8] = NULL; /* NULL terminate the array */
 
 	zone_attribute_group.attrs = zone_attrs;
 

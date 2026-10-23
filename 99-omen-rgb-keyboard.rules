@@ -21,6 +21,7 @@ ACTION=="bind", SUBSYSTEM=="platform", KERNEL=="omen-rgb-keyboard", \
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/gradient_config", \
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/mute_led", \
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/mute_state", \
+  RUN+="/bin/chgrp input /sys$devpath/rgb_zones/brightness_lock", \
   RUN+="/bin/chgrp input /sys$devpath/fan/cpu_fan_rpm", \
   RUN+="/bin/chgrp input /sys$devpath/fan/gpu_fan_rpm", \
   RUN+="/bin/chgrp input /sys$devpath/fan/max_fan", \
@@ -47,6 +48,7 @@ ACTION=="add", SUBSYSTEM=="platform", KERNEL=="omen-rgb-keyboard", ENV{DRIVER}==
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/gradient_config", \
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/mute_led", \
   RUN+="/bin/chgrp input /sys$devpath/rgb_zones/mute_state", \
+  RUN+="/bin/chgrp input /sys$devpath/rgb_zones/brightness_lock", \
   RUN+="/bin/chgrp input /sys$devpath/fan/cpu_fan_rpm", \
   RUN+="/bin/chgrp input /sys$devpath/fan/gpu_fan_rpm", \
   RUN+="/bin/chgrp input /sys$devpath/fan/max_fan", \

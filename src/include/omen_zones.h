@@ -70,6 +70,15 @@ struct platform_zone *match_zone(struct device_attribute *attr);
 void apply_brightness_to_color(struct color_platform *color);
 
 /**
+ * fourzone_apply_brightness_lock - Keep a locked backlight off zero
+ *
+ * While brightness_lock is set the LED class device cannot change the level,
+ * so a level of zero could not be undone from the desktop. Raises it to full
+ * in that case. Safe to call when the lock is clear; it does nothing then.
+ */
+void fourzone_apply_brightness_lock(void);
+
+/**
  * fourzone_apply_current_colors - Write the configured colors to the hardware
  *
  * Applies original_colors scaled by the global brightness to every zone.

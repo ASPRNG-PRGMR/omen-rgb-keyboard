@@ -52,6 +52,12 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 	load_animation_state();
 
 	/*
+	 * A saved level of zero plus brightness_lock=1 from modprobe.d would
+	 * otherwise come up dark with nothing able to raise it.
+	 */
+	fourzone_apply_brightness_lock();
+
+	/*
 	 * Register the LED classdev with the brightness the driver is actually
 	 * using. Left at the default 0 it reports the backlight as off, so
 	 * desktop keyboard-backlight controls show it off and the keyboard
