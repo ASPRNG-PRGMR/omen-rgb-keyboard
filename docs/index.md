@@ -193,6 +193,41 @@ Brightness is specified as a percentage (0-100):
 - `50` = 50% brightness
 - `100` = Maximum brightness
 
+### Preventing the Desktop From Dimming the Keyboard
+
+Desktop environments dim the keyboard backlight when the session goes idle by
+writing to the `omen::kbd_backlight` LED class device. GNOME fades it to
+`idle-brightness` and back, on battery and on AC alike.
+
+`brightness_lock` makes the driver ignore brightness changes arriving that way:
+
+```bash
+# Ignore them from now on
+echo 1 | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/brightness_lock
+
+# Back to normal
+echo 0 | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/brightness_lock
+```
+
+To have it apply from boot, set the module parameter in
+`/etc/modprobe.d/omen_rgb_keyboard.conf`:
+
+```
+options omen_rgb_keyboard brightness_lock=1
+```
+
+While it is set, the desktop's own keyboard-backlight control no longer has any
+effect, since the driver cannot tell an idle fade from a deliberate change. Set
+the level directly instead:
+
+```bash
+echo 80 | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/brightness
+```
+
+Enabling the lock while the backlight happens to be off raises it to full
+first, because a locked level of zero could not be undone from the desktop:
+the lock is exactly what stops the desktop touching the backlight.
+
 ### Animation Modes
 
 The driver supports 12 different animation modes:
