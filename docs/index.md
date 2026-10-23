@@ -16,7 +16,7 @@ Inspired by the original [hp-omen-linux-module](https://github.com/pelrun/hp-ome
 - 4-Zone RGB Control - Individual control over each keyboard zone
 - All-Zone Control - Set all zones to the same color at once
 - Brightness Control - Adjust brightness from 0-100%
-- **10 Animation Modes** - Complete animation system with CPU-efficient timer-based updates
+- **12 Animation Modes** - Complete animation system with CPU-efficient timer-based updates
 - **Omen Key Support** - The Omen key is mapped to KEY_MSDOS for custom shortcuts
 - Real-time Updates - Changes apply immediately
 - Hex Color Format - Use standard RGB hex values
@@ -195,7 +195,7 @@ Brightness is specified as a percentage (0-100):
 
 ### Animation Modes
 
-The driver supports 10 different animation modes:
+The driver supports 12 different animation modes:
 
 **Basic Modes:**
 - **static** - No animation, static colors (default)
@@ -210,6 +210,8 @@ The driver supports 10 different animation modes:
 - **candle** - Warm flickering candle effect with orange/red colors
 - **aurora** - Aurora borealis effect with flowing green/blue waves
 - **disco** - Disco strobe effect with bright multi-colored flashes
+- **gradient** - Custom color cycling with per-zone-group configuration
+- **spectrum** - Slow, even hue cycle with the whole keyboard in unison (20s at speed 1)
 
 ### Animation Speed
 
@@ -273,6 +275,10 @@ echo "6" | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/animation_
 # Candle effect (uses its own warm colors)
 echo "candle" | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/animation_mode
 echo "4" | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/animation_speed
+
+# Spectrum cycle (uses its own colors, slowest speed gives a 20 second cycle)
+echo "spectrum" | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/animation_mode
+echo "1" | sudo tee /sys/devices/platform/omen-rgb-keyboard/rgb_zones/animation_speed
 ```
 
 ## Omen Key Mapping
