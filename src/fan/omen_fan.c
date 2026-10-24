@@ -6,6 +6,8 @@
  * performance) each with a built-in fan curve when Victus WMI + fan table +
  * CONFIG_THERMAL are available; optional custom curve via fan_curve sysfs.
  * CPU PL1/PL2 and GPU CTGP/PPAB follow mainline hp-wmi (Victus-S path).
+ * Registers with the ACPI platform_profile class so power-profiles-daemon
+ * (PPD) can drive the same silent/normal/performance modes.
  *
  * Author: alessandromrc
  */
@@ -25,6 +27,10 @@
 
 #if IS_ENABLED(CONFIG_THERMAL)
 #include <linux/thermal.h>
+#endif
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+#include <linux/platform_profile.h>
 #endif
 
 #include "omen_fan.h"
@@ -102,7 +108,7 @@ static char curve_tz_name[FAN_TZ_NAME_SZ];
 
 static bool fan_curve_manual_off;
 
-/* Last thermal profile name applied via sysfs (for AC PL actualization). */
+/* Last thermal profile name applied (sysfs or PPD/platform_profile). */
 #define THERMAL_NAME_SZ 16
 static char thermal_profile_name[THERMAL_NAME_SZ] = "normal";
 
@@ -115,6 +121,19 @@ static bool gpu_modes_supported = true;
 
 static struct notifier_block power_source_nb;
 static bool power_source_nb_registered;
+
+static void fan_preset_curve_install(const char *name);
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+/*
+ * Stored profile (mainline hp-wmi behaviour): return this on get rather than
+ * the EC byte, so PPD does not see performance "snap back" on battery.
+ */
+static enum platform_profile_option active_platform_profile =
+	PLATFORM_PROFILE_BALANCED;
+static struct device *platform_profile_dev;
+static bool platform_profile_registered;
+#endif
 
 static int fan_victus_userdefine_trigger(void)
 {
@@ -345,10 +364,56 @@ static int fan_wmi_performance_set(u8 mode_byte)
 	return ret;
 }
 
-static int fan_thermal_profile_apply(const char *name)
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+/* PPD: power-saver→silent, balanced→normal, performance→performance */
+static const char *omen_pp_to_name(enum platform_profile_option profile)
+{
+	switch (profile) {
+	case PLATFORM_PROFILE_PERFORMANCE:
+		return "performance";
+	case PLATFORM_PROFILE_BALANCED:
+		return "normal";
+	case PLATFORM_PROFILE_LOW_POWER:
+		return "silent";
+	default:
+		return NULL;
+	}
+}
+
+static enum platform_profile_option omen_name_to_pp(const char *name)
+{
+	if (sysfs_streq(name, "performance"))
+		return PLATFORM_PROFILE_PERFORMANCE;
+	if (sysfs_streq(name, "normal"))
+		return PLATFORM_PROFILE_BALANCED;
+	if (sysfs_streq(name, "silent"))
+		return PLATFORM_PROFILE_LOW_POWER;
+	return PLATFORM_PROFILE_LAST;
+}
+#endif
+
+static void fan_curve_after_profile(const char *name)
+{
+	mutex_lock(&fan_lock);
+	fan_preset_curve_install(name);
+
+	if (curve_enabled && !max_fan_state && fan_iface == OMEN_FAN_IF_VICTUS_S &&
+	    fan_tbl_valid)
+		schedule_delayed_work(&fan_curve_work, 1);
+	mutex_unlock(&fan_lock);
+}
+
+/*
+ * Apply WMI thermal mode + GPU CTGP/PPAB + PL defaults.
+ * from_pp: true when called from platform_profile_set (do not notify PPD).
+ */
+static int fan_thermal_profile_apply(const char *name, bool from_pp)
 {
 	u8 v1, v0;
 	int ret;
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	enum platform_profile_option pp;
+#endif
 
 	if (sysfs_streq(name, "performance")) {
 		v1 = OMEN_V1_PERFORMANCE;
@@ -398,6 +463,21 @@ static int fan_thermal_profile_apply(const char *name)
 	mutex_lock(&fan_lock);
 	strscpy(thermal_profile_name, name, sizeof(thermal_profile_name));
 	mutex_unlock(&fan_lock);
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	pp = omen_name_to_pp(name);
+	if (pp != PLATFORM_PROFILE_LAST)
+		active_platform_profile = pp;
+
+	/*
+	 * Sysfs thermal_profile writes must wake PPD; calls that already came
+	 * from platform_profile_set must not re-enter profile_lock via notify.
+	 */
+	if (!from_pp && platform_profile_registered && platform_profile_dev)
+		platform_profile_notify(platform_profile_dev);
+#endif
+
+	fan_curve_after_profile(name);
 	return 0;
 }
 
@@ -812,19 +892,11 @@ static ssize_t thermal_profile_store(struct device *dev,
 	line[count] = '\0';
 	strim(line);
 
-	ret = fan_thermal_profile_apply(line);
+	ret = fan_thermal_profile_apply(line, false);
 	if (ret == -EINVAL)
 		return -EINVAL;
 	if (ret)
 		return -EIO;
-
-	mutex_lock(&fan_lock);
-	fan_preset_curve_install(line);
-
-	if (curve_enabled && !max_fan_state && fan_iface == OMEN_FAN_IF_VICTUS_S &&
-	    fan_tbl_valid)
-		schedule_delayed_work(&fan_curve_work, 1);
-	mutex_unlock(&fan_lock);
 	return count;
 }
 
@@ -1052,13 +1124,15 @@ static ssize_t power_limits_store(struct device *dev,
 }
 
 /*
- * Mainline omen_powersource_event(): on AC/battery change while Performance
- * is active, re-send PL1/PL2 defaults so the EC picks the right wattage.
+ * Mainline victus_s_powersource_event(): on AC/battery change while
+ * Performance is active, re-send PL1/PL2 defaults so the EC picks the
+ * right wattage for the new power source.
  */
 static int omen_powersource_event(struct notifier_block *nb,
 				  unsigned long event, void *data)
 {
 	struct acpi_bus_event *event_entry = data;
+	bool in_performance;
 	int err;
 
 	if (!event_entry ||
@@ -1066,8 +1140,13 @@ static int omen_powersource_event(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	mutex_lock(&fan_lock);
-	if (!sysfs_streq(thermal_profile_name, "performance") ||
-	    !power_limits_supported) {
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	in_performance =
+		(active_platform_profile == PLATFORM_PROFILE_PERFORMANCE);
+#else
+	in_performance = sysfs_streq(thermal_profile_name, "performance");
+#endif
+	if (!in_performance || !power_limits_supported) {
 		mutex_unlock(&fan_lock);
 		return NOTIFY_DONE;
 	}
@@ -1086,6 +1165,58 @@ static int omen_powersource_event(struct notifier_block *nb,
 	mutex_unlock(&fan_lock);
 	return NOTIFY_DONE;
 }
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+static int omen_platform_profile_probe(void *drvdata, unsigned long *choices)
+{
+	set_bit(PLATFORM_PROFILE_LOW_POWER, choices);
+	set_bit(PLATFORM_PROFILE_BALANCED, choices);
+	set_bit(PLATFORM_PROFILE_PERFORMANCE, choices);
+	return 0;
+}
+
+static int omen_platform_profile_get(struct device *dev,
+				     enum platform_profile_option *profile)
+{
+	*profile = active_platform_profile;
+	return 0;
+}
+
+static int omen_platform_profile_set(struct device *dev,
+				     enum platform_profile_option profile)
+{
+	const char *name = omen_pp_to_name(profile);
+
+	if (!name)
+		return -EOPNOTSUPP;
+
+	return fan_thermal_profile_apply(name, true);
+}
+
+static const struct platform_profile_ops omen_platform_profile_ops = {
+	.probe = omen_platform_profile_probe,
+	.profile_get = omen_platform_profile_get,
+	.profile_set = omen_platform_profile_set,
+};
+
+static void omen_platform_profile_init_from_ec(void)
+{
+	u8 ec = 0;
+	const char *name;
+
+	if (fan_ec_profile_byte(&ec))
+		return;
+
+	name = fan_ec_byte_to_name(ec);
+	if (sysfs_streq(name, "unknown"))
+		return;
+
+	active_platform_profile = omen_name_to_pp(name);
+	if (active_platform_profile == PLATFORM_PROFILE_LAST)
+		active_platform_profile = PLATFORM_PROFILE_BALANCED;
+	strscpy(thermal_profile_name, name, sizeof(thermal_profile_name));
+}
+#endif
 
 static DEVICE_ATTR_RO(cpu_fan_rpm);
 static DEVICE_ATTR_RO(gpu_fan_rpm);
@@ -1147,6 +1278,22 @@ int omen_fan_setup(struct platform_device *pdev)
 	else
 		power_source_nb_registered = true;
 
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	omen_platform_profile_init_from_ec();
+	platform_profile_dev = platform_profile_register(&pdev->dev,
+							 "omen-rgb-keyboard",
+							 NULL,
+							 &omen_platform_profile_ops);
+	if (IS_ERR(platform_profile_dev)) {
+		pr_warn("platform_profile register failed: %ld (PPD integration disabled)\n",
+			PTR_ERR(platform_profile_dev));
+		platform_profile_dev = NULL;
+	} else {
+		platform_profile_registered = true;
+		pr_info("platform_profile registered (PPD: low-power/balanced/performance)\n");
+	}
+#endif
+
 	if (fan_iface == OMEN_FAN_IF_CLASSIC)
 		pr_info("fan interface: classic WMI (RPM read, max fan)\n");
 	else if (fan_iface == OMEN_FAN_IF_VICTUS_S)
@@ -1160,6 +1307,14 @@ int omen_fan_setup(struct platform_device *pdev)
 void omen_fan_cleanup(void)
 {
 	int z = 0;
+
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	if (platform_profile_registered) {
+		platform_profile_remove(platform_profile_dev);
+		platform_profile_dev = NULL;
+		platform_profile_registered = false;
+	}
+#endif
 
 	if (power_source_nb_registered) {
 		unregister_acpi_notifier(&power_source_nb);
@@ -1197,4 +1352,7 @@ void omen_fan_cleanup(void)
 	power_pl1 = HP_POWER_LIMIT_DEFAULT;
 	power_pl2 = HP_POWER_LIMIT_DEFAULT;
 	strscpy(thermal_profile_name, "normal", sizeof(thermal_profile_name));
+#if IS_REACHABLE(CONFIG_ACPI_PLATFORM_PROFILE)
+	active_platform_profile = PLATFORM_PROFILE_BALANCED;
+#endif
 }

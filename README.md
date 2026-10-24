@@ -43,7 +43,7 @@ Inspired by the original [hp-omen-linux-module](https://github.com/pelrun/hp-ome
 - **12 Animation Modes** - Complete animation system with CPU-efficient timer-based updates
 - **Omen Key Support** - The Omen key is mapped to KEY_MSDOS for custom shortcuts
 - **Mute Button LED Control** - Automatic LED sync with system mute state via HDA codec
-- **Fan control** - RPM readout, max fan, thermal presets (silent / normal / performance) with built-in curves, optional custom curves, CPU PL1/PL2 power limits (see below)
+- **Fan control** - RPM readout, max fan, thermal presets (silent / normal / performance) with built-in curves, optional custom curves, CPU PL1/PL2 power limits, and Power Profiles Daemon (PPD) integration via `platform_profile` (see below)
 - Real-time Updates - Changes apply immediately
 - Hex Color Format - Use standard RGB hex values
 
@@ -275,6 +275,27 @@ echo performance | tee "$F/thermal_profile"
 echo "65 65" | tee "$F/power_limits"   # custom PL1/PL2 (watts)
 echo default | tee "$F/power_limits"    # back to BIOS defaults for the active mode
 ```
+
+#### Power Profiles Daemon (PPD)
+
+The driver registers an ACPI `platform_profile` handler (same interface mainline `hp-wmi` uses), so **power-profiles-daemon**, GNOME/KDE power controls, and `powerprofilesctl` drive the Omen thermal modes:
+
+| PPD profile | Kernel `platform_profile` | Driver thermal mode |
+|-------------|---------------------------|---------------------|
+| `power-saver` | `low-power` | `silent` |
+| `balanced` | `balanced` | `normal` |
+| `performance` | `performance` | `performance` |
+
+```bash
+# Via PPD (D-Bus / desktop UI)
+powerprofilesctl set performance
+
+# Or directly via the kernel ABI PPD watches
+echo performance | sudo tee /sys/firmware/acpi/platform_profile
+cat /sys/firmware/acpi/platform_profile_choices
+```
+
+Writing `fan/thermal_profile` keeps PPD in sync (and the reverse). Keep `hp_wmi` blacklisted so only this handler owns the profile.
 
 With udev rules installed, users in the `input` group can use `tee` on these files without `sudo`, same as RGB.
 

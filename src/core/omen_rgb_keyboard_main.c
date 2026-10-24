@@ -26,6 +26,7 @@ MODULE_AUTHOR("alessandromrc");
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
+MODULE_SOFTDEP("pre: platform_profile");
 
 static struct platform_device *hp_wmi_platform_dev;
 
