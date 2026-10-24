@@ -5,6 +5,7 @@
  * RPM read, max fan, OMEN thermal profiles (WMI: silent / normal /
  * performance) each with a built-in fan curve when Victus WMI + fan table +
  * CONFIG_THERMAL are available; optional custom curve via fan_curve sysfs.
+ * CPU PL1/PL2 and GPU CTGP/PPAB follow mainline hp-wmi (Victus-S path).
  *
  * Author: alessandromrc
  */
@@ -16,6 +17,7 @@
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 #include <linux/mutex.h>
+#include <linux/notifier.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
 #include <linux/sysfs.h>
@@ -42,6 +44,11 @@ enum omen_fan_iface {
 
 #define HP_OMEN_EC_THERMAL_PROFILE_OFFSET	0x95
 #define HP_VICTUS_S_EC_THERMAL_PROFILE_OFFSET	0x59
+
+/* Local until kernels that put this in acpi_bus.h (mainline hp-wmi did the same). */
+#ifndef ACPI_AC_CLASS
+#define ACPI_AC_CLASS "ac_adapter"
+#endif
 
 #define MAX_CURVE_POINTS	8
 
@@ -95,6 +102,20 @@ static char curve_tz_name[FAN_TZ_NAME_SZ];
 
 static bool fan_curve_manual_off;
 
+/* Last thermal profile name applied via sysfs (for AC PL actualization). */
+#define THERMAL_NAME_SZ 16
+static char thermal_profile_name[THERMAL_NAME_SZ] = "normal";
+
+/* Last PL1/PL2 written via power_limits sysfs (0 = BIOS default). */
+static u8 power_pl1 = HP_POWER_LIMIT_DEFAULT;
+static u8 power_pl2 = HP_POWER_LIMIT_DEFAULT;
+static bool power_limits_known;
+static bool power_limits_supported = true;
+static bool gpu_modes_supported = true;
+
+static struct notifier_block power_source_nb;
+static bool power_source_nb_registered;
+
 static int fan_victus_userdefine_trigger(void)
 {
 	u8 fc[4] = {};
@@ -105,6 +126,115 @@ static int fan_victus_userdefine_trigger(void)
 	if (ret)
 		return -EIO;
 	return fc[0];
+}
+
+/*
+ * Backport of victus_s_set_cpu_pl1_pl2() from drivers/platform/x86/hp/hp-wmi.c.
+ * HP_POWER_LIMIT_DEFAULT restores BIOS defaults for the active thermal mode.
+ */
+static int omen_set_cpu_pl1_pl2(u8 pl1, u8 pl2)
+{
+	struct omen_power_limits power_limits;
+	int ret;
+
+	if (pl1 == HP_POWER_LIMIT_NO_CHANGE || pl2 == HP_POWER_LIMIT_NO_CHANGE)
+		return -EINVAL;
+	if (pl2 < pl1)
+		return -EINVAL;
+
+	power_limits.pl1 = pl1;
+	power_limits.pl2 = pl2;
+	power_limits.pl4 = HP_POWER_LIMIT_NO_CHANGE;
+	power_limits.cpu_gpu_concurrent_limit = HP_POWER_LIMIT_NO_CHANGE;
+
+	ret = hp_wmi_perform_query(HPWMI_GM_SET_POWER_LIMITS, HPWMI_GAMING,
+				   &power_limits, sizeof(power_limits), 0);
+	if (ret) {
+		if (ret == HPWMI_RET_UNKNOWN_CMDTYPE ||
+		    ret == HPWMI_RET_UNKNOWN_COMMAND)
+			power_limits_supported = false;
+		return ret < 0 ? ret : -EIO;
+	}
+	return 0;
+}
+
+static int omen_gpu_thermal_get(bool *ctgp_enable, bool *ppab_enable,
+				u8 *dstate, u8 *gpu_slowdown_temp)
+{
+	struct omen_gpu_power_modes modes = {};
+	int ret;
+
+	ret = hp_wmi_perform_query(HPWMI_GM_GET_GPU_THERMAL_MODES, HPWMI_GAMING,
+				   &modes, sizeof(modes), sizeof(modes));
+	if (ret) {
+		if (ret == HPWMI_RET_UNKNOWN_CMDTYPE ||
+		    ret == HPWMI_RET_UNKNOWN_COMMAND)
+			gpu_modes_supported = false;
+		return ret < 0 ? ret : -EIO;
+	}
+
+	*ctgp_enable = modes.ctgp_enable ? true : false;
+	*ppab_enable = modes.ppab_enable ? true : false;
+	*dstate = modes.dstate;
+	*gpu_slowdown_temp = modes.gpu_slowdown_temp;
+	return 0;
+}
+
+static int omen_gpu_thermal_set(bool ctgp_enable, bool ppab_enable, u8 dstate)
+{
+	struct omen_gpu_power_modes modes;
+	bool cur_ctgp, cur_ppab;
+	u8 cur_dstate, cur_slowdown;
+	int ret;
+
+	if (!gpu_modes_supported)
+		return -ENODEV;
+
+	ret = omen_gpu_thermal_get(&cur_ctgp, &cur_ppab, &cur_dstate,
+				   &cur_slowdown);
+	if (ret) {
+		pr_debug("GPU modes not updated, unable to get slowdown temp\n");
+		return ret;
+	}
+
+	modes.ctgp_enable = ctgp_enable ? 0x01 : 0x00;
+	modes.ppab_enable = ppab_enable ? 0x01 : 0x00;
+	modes.dstate = dstate;
+	modes.gpu_slowdown_temp = cur_slowdown;
+
+	ret = hp_wmi_perform_query(HPWMI_GM_SET_GPU_THERMAL_MODES, HPWMI_GAMING,
+				   &modes, sizeof(modes), 0);
+	if (ret) {
+		if (ret == HPWMI_RET_UNKNOWN_CMDTYPE ||
+		    ret == HPWMI_RET_UNKNOWN_COMMAND)
+			gpu_modes_supported = false;
+		return ret < 0 ? ret : -EIO;
+	}
+	return 0;
+}
+
+/*
+ * GPU CTGP/PPAB pairing from mainline platform_profile_victus_s_set_ec().
+ * Silent ~ low_power, normal ~ balanced, performance ~ performance.
+ */
+static int omen_gpu_modes_for_profile(const char *name)
+{
+	bool ctgp, ppab;
+
+	if (sysfs_streq(name, "performance")) {
+		ctgp = true;
+		ppab = true;
+	} else if (sysfs_streq(name, "normal")) {
+		ctgp = false;
+		ppab = true;
+	} else if (sysfs_streq(name, "silent")) {
+		ctgp = false;
+		ppab = false;
+	} else {
+		return -EINVAL;
+	}
+
+	return omen_gpu_thermal_set(ctgp, ppab, 1);
 }
 
 static int fan_load_victus_fan_table(void)
@@ -233,10 +363,42 @@ static int fan_thermal_profile_apply(const char *name)
 		return -EINVAL;
 	}
 
+	/* Same user-define kick mainline uses before profile changes. */
+	fan_victus_userdefine_trigger();
+
 	ret = fan_wmi_performance_set(v1);
 	if (ret == HPWMI_RET_INVALID_PARAMETERS)
 		ret = fan_wmi_performance_set(v0);
-	return ret;
+	if (ret)
+		return ret;
+
+	/*
+	 * Victus-S / modern Omen: GPU CTGP/PPAB + PL1/PL2 actualization.
+	 * Failures are non-fatal on boards that lack those WMI commands.
+	 */
+	ret = omen_gpu_modes_for_profile(name);
+	if (ret && ret != -ENODEV)
+		pr_debug("GPU thermal modes for %s: %d\n", name, ret);
+
+	if (power_limits_supported) {
+		ret = omen_set_cpu_pl1_pl2(HP_POWER_LIMIT_DEFAULT,
+					  HP_POWER_LIMIT_DEFAULT);
+		if (ret && ret != -ENODEV)
+			pr_debug("power limit actualize after %s: %d\n",
+				 name, ret);
+		else if (!ret) {
+			mutex_lock(&fan_lock);
+			power_pl1 = HP_POWER_LIMIT_DEFAULT;
+			power_pl2 = HP_POWER_LIMIT_DEFAULT;
+			power_limits_known = true;
+			mutex_unlock(&fan_lock);
+		}
+	}
+
+	mutex_lock(&fan_lock);
+	strscpy(thermal_profile_name, name, sizeof(thermal_profile_name));
+	mutex_unlock(&fan_lock);
+	return 0;
 }
 
 static int fan_ec_profile_byte(u8 *out)
@@ -832,6 +994,99 @@ static ssize_t fan_temp_zone_store(struct device *dev,
 #endif
 }
 
+static ssize_t power_limits_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	if (!power_limits_supported)
+		return sysfs_emit(buf, "unsupported\n");
+	if (!power_limits_known)
+		return sysfs_emit(buf, "default\n");
+	if (power_pl1 == HP_POWER_LIMIT_DEFAULT &&
+	    power_pl2 == HP_POWER_LIMIT_DEFAULT)
+		return sysfs_emit(buf, "default\n");
+	return sysfs_emit(buf, "%u %u\n", power_pl1, power_pl2);
+}
+
+static ssize_t power_limits_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	char line[32];
+	unsigned int pl1, pl2;
+	int ret;
+
+	if (!power_limits_supported)
+		return -ENODEV;
+
+	if (count >= sizeof(line))
+		return -EINVAL;
+	memcpy(line, buf, count);
+	line[count] = '\0';
+	strim(line);
+
+	if (sysfs_streq(line, "default") || sysfs_streq(line, "0 0")) {
+		pl1 = HP_POWER_LIMIT_DEFAULT;
+		pl2 = HP_POWER_LIMIT_DEFAULT;
+	} else if (sscanf(line, "%u %u", &pl1, &pl2) != 2) {
+		return -EINVAL;
+	}
+
+	if (pl1 > 254 || pl2 > 254)
+		return -EINVAL;
+	if (pl2 < pl1)
+		return -EINVAL;
+
+	mutex_lock(&fan_lock);
+	fan_victus_userdefine_trigger();
+	ret = omen_set_cpu_pl1_pl2((u8)pl1, (u8)pl2);
+	if (!ret) {
+		power_pl1 = (u8)pl1;
+		power_pl2 = (u8)pl2;
+		power_limits_known = true;
+	}
+	mutex_unlock(&fan_lock);
+
+	if (ret)
+		return ret;
+	return count;
+}
+
+/*
+ * Mainline omen_powersource_event(): on AC/battery change while Performance
+ * is active, re-send PL1/PL2 defaults so the EC picks the right wattage.
+ */
+static int omen_powersource_event(struct notifier_block *nb,
+				  unsigned long event, void *data)
+{
+	struct acpi_bus_event *event_entry = data;
+	int err;
+
+	if (!event_entry ||
+	    strcmp(event_entry->device_class, ACPI_AC_CLASS) != 0)
+		return NOTIFY_DONE;
+
+	mutex_lock(&fan_lock);
+	if (!sysfs_streq(thermal_profile_name, "performance") ||
+	    !power_limits_supported) {
+		mutex_unlock(&fan_lock);
+		return NOTIFY_DONE;
+	}
+
+	pr_debug("AC event: actualizing CPU PL1/PL2 for performance\n");
+	fan_victus_userdefine_trigger();
+	err = omen_set_cpu_pl1_pl2(HP_POWER_LIMIT_DEFAULT,
+				  HP_POWER_LIMIT_DEFAULT);
+	if (!err) {
+		power_pl1 = HP_POWER_LIMIT_DEFAULT;
+		power_pl2 = HP_POWER_LIMIT_DEFAULT;
+		power_limits_known = true;
+	} else {
+		pr_warn("Failed to actualize power limits: %d\n", err);
+	}
+	mutex_unlock(&fan_lock);
+	return NOTIFY_DONE;
+}
+
 static DEVICE_ATTR_RO(cpu_fan_rpm);
 static DEVICE_ATTR_RO(gpu_fan_rpm);
 static DEVICE_ATTR_RW(max_fan);
@@ -839,6 +1094,7 @@ static DEVICE_ATTR_RW(thermal_profile);
 static DEVICE_ATTR_RW(fan_curve);
 static DEVICE_ATTR_RW(fan_curve_enable);
 static DEVICE_ATTR_RW(fan_temp_zone);
+static DEVICE_ATTR_RW(power_limits);
 
 static struct attribute *fan_attrs[] = {
 	&dev_attr_cpu_fan_rpm.attr,
@@ -848,6 +1104,7 @@ static struct attribute *fan_attrs[] = {
 	&dev_attr_fan_curve.attr,
 	&dev_attr_fan_curve_enable.attr,
 	&dev_attr_fan_temp_zone.attr,
+	&dev_attr_power_limits.attr,
 	NULL,
 };
 
@@ -882,6 +1139,14 @@ int omen_fan_setup(struct platform_device *pdev)
 		return ret;
 	}
 
+	power_source_nb.notifier_call = omen_powersource_event;
+	ret = register_acpi_notifier(&power_source_nb);
+	if (ret)
+		pr_warn("Failed to install ACPI power source notifier: %d\n",
+			ret);
+	else
+		power_source_nb_registered = true;
+
 	if (fan_iface == OMEN_FAN_IF_CLASSIC)
 		pr_info("fan interface: classic WMI (RPM read, max fan)\n");
 	else if (fan_iface == OMEN_FAN_IF_VICTUS_S)
@@ -895,6 +1160,11 @@ int omen_fan_setup(struct platform_device *pdev)
 void omen_fan_cleanup(void)
 {
 	int z = 0;
+
+	if (power_source_nb_registered) {
+		unregister_acpi_notifier(&power_source_nb);
+		power_source_nb_registered = false;
+	}
 
 	mutex_lock(&fan_lock);
 	fan_max_keepalive_armed = false;
@@ -923,4 +1193,8 @@ void omen_fan_cleanup(void)
 	curve_tz = NULL;
 #endif
 	fan_curve_manual_off = false;
+	power_limits_known = false;
+	power_pl1 = HP_POWER_LIMIT_DEFAULT;
+	power_pl2 = HP_POWER_LIMIT_DEFAULT;
+	strscpy(thermal_profile_name, "normal", sizeof(thermal_profile_name));
 }

@@ -29,13 +29,34 @@ enum hp_wmi_gm_query {
 	HPWMI_GM_FAN_COUNT = 0x10,
 	HPWMI_GM_FAN_SPEED_GET = 0x11,
 	HPWMI_GM_SET_PERFORMANCE_MODE = 0x1A,
+	HPWMI_GM_GET_GPU_THERMAL_MODES = 0x21,
+	HPWMI_GM_SET_GPU_THERMAL_MODES = 0x22,
 	HPWMI_GM_FAN_SPEED_MAX_GET = 0x26,
 	HPWMI_GM_FAN_SPEED_MAX_SET = 0x27,
 	HPWMI_GM_GET_SYSTEM_DESIGN_DATA = 0x28,
+	HPWMI_GM_SET_POWER_LIMITS = 0x29,
 	HPWMI_GM_VICTUS_FAN_SPEED_GET = 0x2D,
 	HPWMI_GM_VICTUS_FAN_SPEED_SET = 0x2E,
 	HPWMI_GM_VICTUS_FAN_TABLE_GET = 0x2F,
 };
+
+/* HP WMI 0x29 payload (same layout as mainline hp-wmi). */
+struct omen_power_limits {
+	u8 pl1;
+	u8 pl2;
+	u8 pl4;
+	u8 cpu_gpu_concurrent_limit;
+} __packed;
+
+struct omen_gpu_power_modes {
+	u8 ctgp_enable;
+	u8 ppab_enable;
+	u8 dstate;
+	u8 gpu_slowdown_temp;
+} __packed;
+
+#define HP_POWER_LIMIT_DEFAULT		0x00
+#define HP_POWER_LIMIT_NO_CHANGE	0xFF
 
 enum hp_wmi_command {
 	HPWMI_READ = 0x01,

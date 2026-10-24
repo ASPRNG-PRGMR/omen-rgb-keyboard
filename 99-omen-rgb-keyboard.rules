@@ -29,11 +29,13 @@ ACTION=="bind", SUBSYSTEM=="platform", KERNEL=="omen-rgb-keyboard", \
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_curve", \
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_curve_enable", \
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_temp_zone", \
+  RUN+="/bin/chgrp input /sys$devpath/fan/power_limits", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/max_fan", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/thermal_profile", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/fan_curve", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/fan_curve_enable", \
-  RUN+="/bin/chmod g+w /sys$devpath/fan/fan_temp_zone"
+  RUN+="/bin/chmod g+w /sys$devpath/fan/fan_temp_zone", \
+  RUN+="/bin/chmod g+w /sys$devpath/fan/power_limits"
 
 # Built-in driver or synchronous probe: device may uevent with DRIVER already set.
 ACTION=="add", SUBSYSTEM=="platform", KERNEL=="omen-rgb-keyboard", ENV{DRIVER}=="omen-rgb-keyboard", \
@@ -56,8 +58,10 @@ ACTION=="add", SUBSYSTEM=="platform", KERNEL=="omen-rgb-keyboard", ENV{DRIVER}==
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_curve", \
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_curve_enable", \
   RUN+="/bin/chgrp input /sys$devpath/fan/fan_temp_zone", \
+  RUN+="/bin/chgrp input /sys$devpath/fan/power_limits", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/max_fan", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/thermal_profile", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/fan_curve", \
   RUN+="/bin/chmod g+w /sys$devpath/fan/fan_curve_enable", \
-  RUN+="/bin/chmod g+w /sys$devpath/fan/fan_temp_zone"
+  RUN+="/bin/chmod g+w /sys$devpath/fan/fan_temp_zone", \
+  RUN+="/bin/chmod g+w /sys$devpath/fan/power_limits"

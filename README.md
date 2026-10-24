@@ -43,7 +43,7 @@ Inspired by the original [hp-omen-linux-module](https://github.com/pelrun/hp-ome
 - **12 Animation Modes** - Complete animation system with CPU-efficient timer-based updates
 - **Omen Key Support** - The Omen key is mapped to KEY_MSDOS for custom shortcuts
 - **Mute Button LED Control** - Automatic LED sync with system mute state via HDA codec
-- **Fan control** - RPM readout, max fan, thermal presets (silent / normal / performance) with built-in curves, optional custom curves (see below)
+- **Fan control** - RPM readout, max fan, thermal presets (silent / normal / performance) with built-in curves, optional custom curves, CPU PL1/PL2 power limits (see below)
 - Real-time Updates - Changes apply immediately
 - Hex Color Format - Use standard RGB hex values
 
@@ -259,12 +259,22 @@ Requires the same HP WMI GUID as RGB; **blacklist `hp_wmi`** if both would load 
 |------|---------|
 | `cpu_fan_rpm`, `gpu_fan_rpm` | Read-only RPM (where supported) |
 | `max_fan` | `0` / `1` — automatic vs max fans |
-| `thermal_profile` | Write `silent`, `normal`, or `performance` (WMI preset); read maps EC where possible |
+| `thermal_profile` | Write `silent`, `normal`, or `performance` (WMI preset); read maps EC where possible. Also applies GPU CTGP/PPAB and re-actualizes PL1/PL2 defaults (mainline hp-wmi Victus-S behaviour) |
+| `power_limits` | CPU PL1/PL2 in watts (`PL1 PL2`), or `default` / `0 0` to restore BIOS defaults. PL2 must be ≥ PL1. Read shows last written values (firmware has no get) |
 | `fan_curve` | Read/write the active curve (see **Fan curve format** below) |
 | `fan_curve_enable` | `0` stops the curve worker; `1` starts it (uses current `fan_curve` points) |
 | `fan_temp_zone` | Optional thermal zone name (e.g. `x86_pkg_temp`); if unset, the driver tries common zone names |
 
 After a successful `thermal_profile` write, built-in preset curves are copied into `fan_curve` and the worker starts automatically unless you previously set `fan_curve_enable` to `0` (manual off). Enabling **max fan** disables the curve path. Custom points overwrite `fan_curve`; switching `thermal_profile` again replaces them with that preset’s built-in steps.
+
+While `thermal_profile` is `performance`, AC plug/unplug re-sends PL1/PL2 defaults so the EC picks the correct wattage for the new power source (same fix as mainline `hp-wmi`).
+
+```bash
+F=/sys/devices/platform/omen-rgb-keyboard/fan
+echo performance | tee "$F/thermal_profile"
+echo "65 65" | tee "$F/power_limits"   # custom PL1/PL2 (watts)
+echo default | tee "$F/power_limits"    # back to BIOS defaults for the active mode
+```
 
 With udev rules installed, users in the `input` group can use `tee` on these files without `sudo`, same as RGB.
 
